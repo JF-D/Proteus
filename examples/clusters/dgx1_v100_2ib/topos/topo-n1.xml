@@ -1,0 +1,28 @@
+<system version="1">
+  <cpu numaid="0" affinity="00000000,00000000,00000000,00000000,00000000,0000000f,ff000fff" arch="x86_64" vendor="GenuineIntel" familyid="6" modelid="85">
+    <pci busid="0000:18:00.0" class="0x060400" vendor="0x10b5" device="0x9765" subsystem_vendor="0x10b5" subsystem_device="0x9765" link_speed="" link_width="0">
+      <pci busid="0000:1a:00.0" class="0x030200" vendor="0x10de" device="0x1db5" subsystem_vendor="0x10de" subsystem_device="0x1249" link_speed="" link_width="0">
+        <gpu dev="0" sm="70" rank="0" gdr="0">
+          <nvlink target="0000:3e:00.0" count="2" tclass="0x030200"/>
+          <nvlink target="0000:3d:00.0" count="1" tclass="0x030200"/>
+          <nvlink target="0000:1b:00.0" count="1" tclass="0x030200"/>
+          <nvlink target="0000:88:00.0" count="2" tclass="0x030200"/>
+        </gpu>
+      </pci>
+      <pci busid="0000:1c:00.0" class="0x020700" vendor="0x15b3" device="0x101b" subsystem_vendor="0x15b3" subsystem_device="0x0006" link_speed="" link_width="0">
+        <nic>
+          <net name="mlx5_0" dev="0" speed="600000" port="1" guid="0x82a18600039b0398" maxconn="262144" gdr="0"/>
+        </nic>
+      </pci>
+    </pci>
+  </cpu>
+  <cpu numaid="1" affinity="00000000,00000000,00000000,00000000,00000000,0000fff0,00fff000" arch="x86_64" vendor="GenuineIntel" familyid="6" modelid="85">
+    <pci busid="0000:86:00.0" class="0x060400" vendor="0x10b5" device="0x9765" subsystem_vendor="0x10b5" subsystem_device="0x9765" link_speed="" link_width="0">
+      <pci busid="0000:8a:00.0" class="0x020700" vendor="0x15b3" device="0x101b" subsystem_vendor="0x15b3" subsystem_device="0x0006" link_speed="" link_width="0">
+        <nic>
+          <net name="mlx5_1" dev="1" speed="600000" port="1" guid="0x3aa18600039b0398" maxconn="262144" gdr="0"/>
+        </nic>
+      </pci>
+    </pci>
+  </cpu>
+</system>

@@ -1,0 +1,16 @@
+<system version="1">
+  <cpu numaid="-1" arch="x86_64" vendor="GenuineIntel" familyid="6" modelid="79">
+    <pci busid="0000:87:00.0" class="0x060400" link_speed="" link_width="0">
+      <pci busid="0000:8a:00.0" class="0x030000" link_speed="" link_width="0">
+        <gpu dev="7" sm="61" rank="0" gdr="0"/>
+      </pci>
+    </pci>
+  </cpu>
+  <cpu numaid="0" affinity="ffffffff,ffffffff" arch="x86_64" vendor="GenuineIntel" familyid="6" modelid="79">
+    <pci busid="0000:01:00.0" class="0x028000" link_speed="" link_width="0">
+      <nic>
+        <net name="mlx4_0" dev="0" speed="56000" port="1" guid="0x232a6800034b6b50" maxconn="425400" gdr="0"/>
+      </nic>
+    </pci>
+  </cpu>
+</system>
