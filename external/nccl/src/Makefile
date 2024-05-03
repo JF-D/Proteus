@@ -40,7 +40,7 @@ LDFLAGS    += -L${CUDA_LIB} -l$(CUDARTLIB) -lpthread -lrt -ldl
 DEVICELIB  := $(BUILDDIR)/obj/collectives/device/colldevice.a
 
 PYTHON := $(shell which python)
-PYPATH := $(PYTHON:%/bin/python=%/include/python3.8) # change PY Module PATH
+PYPATH := $(shell $(PYTHON) -c "from sysconfig import get_paths; print(get_paths()['include'])")
 PYBIND11_INCDIR := $(abspath ..)/3rdparty/pybind11/include
 PROTEUS_DIR := $(abspath ../../..)/proteus
 

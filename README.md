@@ -17,6 +17,7 @@ make -j src.build
 Then, add `proteus` to `PYTHONPATH`
 
 ```
+pip install graphviz toposort
 export PYTHONPATH=$PYTHONPATH:/path/to/proteus
 ```
 
@@ -30,6 +31,8 @@ The cluster configuration is defined with a device topo file and a cluster json 
 
 We provide some examples in `examples/`. Try Proteus with
 ```
+cd examples
+mkdir -p log
 python alexnet.py -model alexnet -bs 256 -cluster clusters/dgx1_v100_2ib/n1_g1.json -ps dp --profile-iters 50
 ```
 
