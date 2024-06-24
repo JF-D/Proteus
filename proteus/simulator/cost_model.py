@@ -6,6 +6,8 @@ import bisect
 from collections import defaultdict
 import proteus.binding as binding
 
+
+
 global PROFILE_ITERS
 PROFILE_ITERS = 10
 
@@ -154,6 +156,7 @@ class OpCostModel:
         reprofiled_op = OpCostModel.reprofiled_op[
             op.__class__.__name__][cost_type]
         reprofile = reprofile and key not in reprofiled_op
+        
         if key in cost_cache and not reprofile:
             return cost_cache[key]
         if cost_type == 'profile':

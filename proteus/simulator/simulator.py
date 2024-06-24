@@ -807,6 +807,7 @@ class DevGroupDispatcher:
                 if tsk.id not in tgraph.task_ids:
                     continue
                 if isinstance(tsk, MemTask):
+                    # print(self.executors)
                     ntsks = self.executors[tsk.rank].alloc(tsk)
                     ntasks.extend(ntsks)
                 elif isinstance(tsk, CompTask):
@@ -831,10 +832,11 @@ class Simulator:
                  share_bandwidth=True,
                  overlap_factor=0,
                  megatron=False,
-                 FlexFlow=False):
+                 FlexFlow=False,
+                 cache_filename='cache'):
         self.graph = graph
         self.strategy_tree = strategy_tree
-        self._cost_model = OpCostModel()
+        self._cost_model = OpCostModel(cache_filename)
         self.flexflow = False #FlexFlow
 
         self.executors = {}
@@ -932,8 +934,10 @@ class Simulator:
         self.dev_group_dis = {}
         for dev_group in dev_groups:
             key = []
+            
             for dev_id in dev_group:
                 key.append(int(dev_id.split(':')[1]))
+            # print(key)
             self.dev_group_dis[tuple(sorted(key))] = DevGroupDispatcher(
                 [self.executors[dev_id] for dev_id in key],
                 self.strategy_tree.root.pconfig['schedule']['interleave_freq'])
@@ -1169,10 +1173,16 @@ class Simulator:
         self.iter_speed = max(list(devices.values()))
 
     def print_stats(self):
+        stats = {
+            "Iteration Time": self.iter_speed,
+            "Compile Time (s)": self.compile_time,
+            "Run Time (s)": self.run_time,
+            "Max Memory (MB)": 0
+        }
         if self.flexflow:
             print()
             print('Iter Speed: {:.4f}ms/iter'.format(self.iter_speed))
-            return
+            return stats
 
         print()
         print(
@@ -1198,4 +1208,7 @@ class Simulator:
                 dev_id = i
         print('Max memory alloc: {:.3f}MB on device {}'.format(
             max_memory, dev_id))
+        stats['Max Memory (MB)'] = max_memory
         print()
+
+        return stats
