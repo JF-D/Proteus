@@ -394,9 +394,9 @@ if __name__ == '__main__':
         stree.root.criterion.split(0, 1, item='in:1')
         stree.root.criterion.map(dp_mesh, item='in:1')
 
-        input_mesh = [mesh[i].reshape(-1, 1) for i in range(pp_deg)]
-        input_mesh = np.concatenate(input_mesh, 1)
-        stree.root.children['0'].attention.scaled_attention_mask.split(1, mp_deg, item='in:1')
+        input_mesh = [mesh[i].reshape(mesh[i].shape + (1, )) for i in range(pp_deg)]
+        input_mesh = np.concatenate(input_mesh, -1)
+        stree.root.children['0'].attention.scaled_attention_mask.split([0, 1], [dp_deg, mp_deg], item='in:1')
         stree.root.children['0'].attention.scaled_attention_mask.map(input_mesh, item='in:1')
         embd_mesh = np.concatenate([mesh[0], mesh[-1]], 0).transpose()
         stree.root.embedding.word_embeddings.split(0, mp_deg, item='weight')
