@@ -1,14 +1,17 @@
 /*************************************************************************
- * Copyright (c) 2016-2021, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
 
-template<typename T, typename RedOp, typename Fan, int Direct>
-class Primitives<T, RedOp, Fan, Direct, ProtoLL>:
-  public PrimitivesWithoutDirect<Primitives<T, RedOp, Fan, Direct, ProtoLL>> {
+template<typename T, typename RedOp, typename Fan, int Direct, int P2p>
+class Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>:
+  public PrimitivesWithoutDirect<Primitives<T, RedOp, Fan, Direct, ProtoLL, P2p>> {
 
-  static constexpr int MaxRecv = Fan::MaxRecv, MaxSend = Fan::MaxSend;
+  // In the case of Fan::MaxRecv == 0, we need to force MaxRecv to 1 for this to compile
+  // This is because of a recv buffer which is allocated to MaxRecv length in send-only cases
+  static constexpr int MaxRecv = Fan::MaxRecv > 1 ? Fan::MaxRecv : 1;
+  static constexpr int MaxSend = Fan::MaxSend;
   static constexpr int Input=0, Output=1;
   RedOp redOp;
   const int tid;
@@ -41,7 +44,10 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL>:
   inline __device__ uint32_t sendFlag(int i) { return NCCL_LL_FLAG(sendStep[i]+1); }
 
   inline __device__ void barrier() {
-    asm volatile ("bar.sync %1, %0;" :: "r"(nthreads), "r"(1+group));
+    if (nthreads == WARP_SIZE)
+      __syncwarp();
+    else
+      asm volatile ("bar.sync %1, %0;" :: "r"(nthreads), "r"(15-group));
   }
 
   uint32_t abort = 0;
@@ -218,7 +224,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL>:
   }
 
   template <int RECV, int SEND, int SrcBuf, int DstBuf>
-  __device__ void LLGenericOp(intptr_t srcIx, intptr_t dstIx, int nelem, bool postOp) {
+  __device__ __forceinline__ void LLGenericOp(intptr_t srcIx, intptr_t dstIx, int nelem, bool postOp) {
     constexpr int SRC = SrcBuf != -1 ? 1 : 0;
     constexpr int DST = DstBuf != -1 ? 1 : 0;
     T *srcElts = SrcBuf == -1 ? nullptr : userBufs[SrcBuf] + srcIx;
@@ -249,18 +255,18 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL>:
       }
       if (SRC) {
         data = dl.loadFinish();
-        if (SrcBuf == Input) data = MULTI<RedOp, T>().preOp(redOp, data);
+        if (SrcBuf == Input) data = applyPreOp(redOp, data);
       }
       if (RECV) {
-        data = !SRC ? peerData : MULTI<RedOp,T>()(redOp, peerData, data);
+        data = !SRC ? peerData : applyReduce(redOp, peerData, data);
         #pragma unroll MaxRecv
         for (int i=1; i < MaxRecv && i < fan.nrecv(); i++) {
           peerData = readLLFinish(offset, line, i);
-          data = MULTI<RedOp,T>()(redOp, peerData, data);
+          data = applyReduce(redOp, peerData, data);
         }
       }
 
-      if (postOp) data = MULTI<RedOp, T>().postOp(redOp, data);
+      if (postOp) data = applyPostOp(redOp, data);
 
       // Send : inter-node, then intra-node, then local
       if (SEND) {
@@ -316,21 +322,22 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL>:
  public:
   __device__  Primitives(
       const int tid, const int nthreads, int const *recvPeers, int const *sendPeers,
-      void const *inputBuf, void *outputBuf, int group=0
+      void const *inputBuf, void *outputBuf, uint64_t redOpArg, uint8_t group=0,
+      uint8_t connIndexRecv=0, uint8_t connIndexSend=0
     ):
-    redOp(FuncTraits<RedOp>().make(ncclShmem.comm.nRanks)),
+    redOp(redOpArg),
     tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), group(group),
     stepLines(ncclShmem.comm.buffSizes[NCCL_PROTO_LL]/NCCL_STEPS/sizeof(ncclLLFifoLine)) {
-
     auto *channel = &ncclShmem.channel;
     // If we are going to support oneshot collNet + LL, then we would need to add connector index here
     int nrecv=0, nsend=0;
-    while (nrecv < MaxRecv && recvPeers[nrecv] >= 0) {
-      loadRecvConn(&channel->devPeers[recvPeers[nrecv]].recv->conn, nrecv);
+    // We compare with Fan::MaxRecv here because this->MaxRecv is always at least 1
+    while (nrecv < Fan::MaxRecv && recvPeers[nrecv] >= 0) {
+      loadRecvConn(&channel->peers[recvPeers[nrecv]]->recv[connIndexRecv], nrecv);
       nrecv++;
     }
     while (nsend < MaxSend && sendPeers[nsend] >= 0) {
-      loadSendConn(&channel->devPeers[sendPeers[nsend]].send->conn, nsend);
+      loadSendConn(&channel->peers[sendPeers[nsend]]->send[connIndexSend], nsend);
       nsend++;
     }
     this->fan = Fan(nrecv, nsend);

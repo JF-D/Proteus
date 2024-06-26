@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2019-2021, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -9,7 +9,7 @@
 
 #include "debug.h"
 
-// Check CUDA calls
+// Check CUDA RT calls
 #define CUDACHECK(cmd) do {                                 \
     cudaError_t err = cmd;                                  \
     if( err != cudaSuccess ) {                              \
@@ -60,10 +60,53 @@
   } \
 } while(true)
 
+#define SYSCHECKGOTO(statement, res, label) do { \
+  if ((statement) == -1) {    \
+    /* Print the back trace*/ \
+    res = ncclSystemError;    \
+    INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
+    goto label; \
+  } \
+} while (0);
+
+#define NEQCHECK(statement, value) do {   \
+  if ((statement) != value) {             \
+    /* Print the back trace*/             \
+    INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, ncclSystemError);    \
+    return ncclSystemError;     \
+  }                             \
+} while (0);
+
+#define NEQCHECKGOTO(statement, value, res, label) do { \
+  if ((statement) != value) { \
+    /* Print the back trace*/ \
+    res = ncclSystemError;    \
+    INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
+    goto label; \
+  } \
+} while (0);
+
+#define EQCHECK(statement, value) do {    \
+  if ((statement) == value) {             \
+    /* Print the back trace*/             \
+    INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, ncclSystemError);    \
+    return ncclSystemError;     \
+  }                             \
+} while (0);
+
+#define EQCHECKGOTO(statement, value, res, label) do { \
+  if ((statement) == value) { \
+    /* Print the back trace*/ \
+    res = ncclSystemError;    \
+    INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
+    goto label; \
+  } \
+} while (0);
+
 // Propagate errors up
 #define NCCLCHECK(call) do { \
   ncclResult_t res = call; \
-  if (res != ncclSuccess) { \
+  if (res != ncclSuccess && res != ncclInProgress) { \
     /* Print the back trace*/ \
     if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
     return res; \
@@ -72,11 +115,46 @@
 
 #define NCCLCHECKGOTO(call, res, label) do { \
   res = call; \
-  if (res != ncclSuccess) { \
+  if (res != ncclSuccess && res != ncclInProgress) { \
     /* Print the back trace*/ \
     if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
     goto label; \
   } \
 } while (0);
+
+#define NCCLWAIT(call, cond, abortFlagPtr) do {         \
+  volatile uint32_t* tmpAbortFlag = (abortFlagPtr);     \
+  ncclResult_t res = call;                \
+  if (res != ncclSuccess && res != ncclInProgress) {               \
+    if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
+    return ncclInternalError;             \
+  }                                       \
+  if (tmpAbortFlag) NEQCHECK(*tmpAbortFlag, 0); \
+} while (!(cond));
+
+#define NCCLWAITGOTO(call, cond, abortFlagPtr, res, label) do { \
+  volatile uint32_t* tmpAbortFlag = (abortFlagPtr);             \
+  res = call;                             \
+  if (res != ncclSuccess && res != ncclInProgress) {               \
+    if (ncclDebugNoWarn == 0) INFO(NCCL_ALL,"%s:%d -> %d", __FILE__, __LINE__, res);    \
+    goto label;                           \
+  }                                       \
+  if (tmpAbortFlag) NEQCHECKGOTO(*tmpAbortFlag, 0, res, label); \
+} while (!(cond));
+
+#define NCCLCHECKTHREAD(a, args) do { \
+  if (((args)->ret = (a)) != ncclSuccess && (args)->ret != ncclInProgress) { \
+    INFO(NCCL_INIT,"%s:%d -> %d [Async thread]", __FILE__, __LINE__, (args)->ret); \
+    return args; \
+  } \
+} while(0)
+
+#define CUDACHECKTHREAD(a) do { \
+  if ((a) != cudaSuccess) { \
+    INFO(NCCL_INIT,"%s:%d -> %d [Async thread]", __FILE__, __LINE__, args->ret); \
+    args->ret = ncclUnhandledCudaError; \
+    return args; \
+  } \
+} while(0)
 
 #endif

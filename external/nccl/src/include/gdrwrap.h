@@ -10,6 +10,7 @@
 #include "nccl.h"
 #include <stdint.h> // for standard [u]intX_t types
 #include <stdio.h>
+#include <stdlib.h>
 
 // These can be used if the GDR library isn't thread safe
 #include <pthread.h>
@@ -242,7 +243,7 @@ static ncclResult_t ncclGdrCudaFree(void* gdrHandle) {
   gdr_mem_desc_t *md = (gdr_mem_desc_t*)gdrHandle;
   NCCLCHECK(wrap_gdr_unmap(ncclGdrCopy, md->gdrMh, md->gdrMap, md->gdrMapSize));
   NCCLCHECK(wrap_gdr_unpin_buffer(ncclGdrCopy, md->gdrMh));
-  CUDACHECK(cudaFree(md->gdrDevMem));
+  NCCLCHECK(ncclCudaFree(md->gdrDevMem));
   free(md);
 
   return ncclSuccess;
