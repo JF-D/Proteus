@@ -103,7 +103,7 @@ if __name__ == '__main__':
     if args.global_bs is None:
         bs = args.bs * ndev
     else:
-        bs = args.global_bs
+        bs = args.global_bs // args.n_macro_batch
     inputs = {
         # tuple of input shape
         'input': (tuple([bs, seq_length]), (
