@@ -1,0 +1,37 @@
+<system version="1">
+  <cpu numaid="0" affinity="00000000,00000000,00000000,00000000,00000000,0000000f,ff000fff" arch="x86_64" vendor="GenuineIntel" familyid="6" modelid="85">
+    <pci busid="0000:18:00.0" class="0x060400" vendor="0x10b5" device="0x8764" subsystem_vendor="0x10b5" subsystem_device="0x8764" link_speed="" link_width="0">
+      <pci busid="0000:1a:00.0" class="0x030200" vendor="0x10de" device="0x1db5" subsystem_vendor="0x10de" subsystem_device="0x1249" link_speed="" link_width="0">
+        <gpu dev="0" sm="70" rank="0" gdr="0">
+          <nvlink target="0000:1b:00.0" count="1" tclass="0x030200"/>
+          <nvlink target="0000:b2:00.0" count="2" tclass="0x030200"/>
+          <nvlink target="0000:3e:00.0" count="1" tclass="0x030200"/>
+          <nvlink target="0000:3d:00.0" count="2" tclass="0x030200"/>
+        </gpu>
+      </pci>
+      <pci busid="0000:1b:00.0" class="0x030200" vendor="0x10de" device="0x1db5" subsystem_vendor="0x10de" subsystem_device="0x1249" link_speed="" link_width="0">
+        <gpu dev="1" sm="70" rank="1" gdr="0">
+          <nvlink target="0000:3e:00.0" count="2" tclass="0x030200"/>
+          <nvlink target="0000:3d:00.0" count="1" tclass="0x030200"/>
+          <nvlink target="0000:1a:00.0" count="1" tclass="0x030200"/>
+          <nvlink target="0000:b1:00.0" count="2" tclass="0x030200"/>
+        </gpu>
+      </pci>
+    </pci>
+    <pci busid="0000:3b:00.0" class="0x060400" vendor="0x10b5" device="0x8764" subsystem_vendor="0x10b5" subsystem_device="0x8764" link_speed="" link_width="0">
+      <pci busid="0000:3d:00.0" class="0x030200" vendor="0x10de" device="0x1db5" subsystem_vendor="0x10de" subsystem_device="0x1249" link_speed="" link_width="0">
+        <gpu dev="2" sm="70" rank="2" gdr="0">
+          <nvlink target="0000:89:00.0" count="1" tclass="0x030200"/>
+          <nvlink target="0000:1b:00.0" count="1" tclass="0x030200"/>
+          <nvlink target="0000:1a:00.0" count="2" tclass="0x030200"/>
+          <nvlink target="0000:3e:00.0" count="2" tclass="0x030200"/>
+        </gpu>
+      </pci>
+      <pci busid="0000:3f:00.0" class="0x020000" vendor="0x15b3" device="0x1017" subsystem_vendor="0x15b3" subsystem_device="0x0006" link_speed="" link_width="0">
+        <nic>
+          <net name="mlx5_0" dev="0" speed="100000" port="1" guid="0x928eb300039b0398" maxconn="262144" gdr="0"/>
+        </nic>
+      </pci>
+    </pci>
+  </cpu>
+</system>

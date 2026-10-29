@@ -443,6 +443,13 @@ class ProteusModel(object):
         return cfg
 
     def export_config(self, file, shape=True):
+        # make the file path valid if not existed
+        import os
+        if not os.path.exists(os.path.dirname(file)) and os.path.dirname(file) != '':
+            print(f"Creating directory {os.path.dirname(file)}")
+            os.makedirs(os.path.dirname(file))
+
+        
         with open(file, 'w') as f:
             for k, data in self.datas.items():
                 if shape:

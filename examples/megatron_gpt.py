@@ -1,7 +1,9 @@
 import os
 import argparse
+from pathlib import Path
 import json
 import numpy as np
+import sys
 import proteus
 import proteus.torchapi.nn as nn
 from proteus.simulator.simulator import Simulator
@@ -12,34 +14,46 @@ from models.transformer import *
 from build_dev_topo import build_cluster
 
 parser = argparse.ArgumentParser()
+parser.add_argument('-n-gpu-per-node', type=int, default=2)
 parser.add_argument('-bs', type=int, default=32)
 parser.add_argument('-global-bs', type=int, default=None)
 parser.add_argument('-n-macro-batch', type=int, default=1)
 
 parser.add_argument('-model', type=str, default='gpt')
-parser.add_argument('--no-seq-first', action='store_false', dest='seq_first')
+parser.add_argument('-no-seq-first', action='store_false', default = False, dest='seq_first')
 parser.add_argument('-version', type=str, default=None)
 parser.add_argument('-nlayer', type=int, default=12)
 parser.add_argument('-seq-length', type=int, default=512)
 parser.add_argument('-hidden-size', type=int, default=768)
 parser.add_argument('-nheads', type=int, default=12)
 parser.add_argument('-vocab-size', type=int, default=40478)  # 50257
-parser.add_argument('--make-vocab-size-divisible-by', type=int, default=128)
-parser.add_argument('-cluster', type=str, default='n1_g1')
+parser.add_argument('-make-vocab-size-divisible-by', type=int, default=128)
+parser.add_argument('-cluster', type=str, default='clusters/dgx1_v100_1ib/cluster_info.json')
+#n_virtual_stages
+parser.add_argument('-n-virtual-stages', type=int, default=1)
 
 parser.add_argument('-ps', type=str, default='dp')
 parser.add_argument('-zero', type=int, default=0)
 parser.add_argument('-mp-deg', type=int, default=1)
 parser.add_argument('-pp-deg', type=int, default=1)
-parser.add_argument('--checkpoint', action='store_true')
+parser.add_argument('-checkpoint', type=int, default=0)
+# parser.add_argument("-checkpoint", type=bool, default=False)
 parser.add_argument('-dom', type=str, default='DM')
-parser.add_argument('--disable-collective', action='store_true')
-parser.add_argument('--bucket-size', type=int, default=25)
-parser.add_argument('--no-share-bandwidth', action='store_true')
-parser.add_argument('--reprofile', action='store_true')
-parser.add_argument('--profile-iters', type=int, default=10)
-parser.add_argument('--test', action='store_true')
-parser.add_argument('--flexflow', action='store_true')
+parser.add_argument('-disable-collective', action='store_true')
+# parser.add_argument("-disable-collective", type=bool, default=False)
+parser.add_argument('-bucket-size', type=int, default=25)
+parser.add_argument('-no-share-bandwidth', action='store_true')
+# parser.add_argument("-no-share-bandwidth", type=bool, default=False)
+parser.add_argument('-reprofile', default = False, action='store_true')
+# parser.add_argument("-reprofile", type=bool, default=False)
+parser.add_argument('-profile-iters', type=int, default=10)
+parser.add_argument('-test', action='store_true')
+# parser.add_argument("-test", type=bool, default=False)
+parser.add_argument('-flexflow', action='store_true')
+# parser.add_argument("-flexflow", type=bool, default=False)
+
+# -output_dir
+parser.add_argument('-output_dir', type=str, default='megatron_gpt_output')
 args = parser.parse_args()
 
 if __name__ == '__main__':
@@ -73,12 +87,27 @@ if __name__ == '__main__':
         attention_dropout_prob = output_dropout_prob = 0.1
         vocab_size = args.vocab_size
 
+    sku = 'V100' if 'v100' in args.cluster else 'H100'
+    cache_filename='cache'
+    cache_filename += '_' + str(sku) + '_'
+    cache_filename += str(args.n_gpu_per_node)
+    print(f"Cache filename: {cache_filename}")
+
+    # Number of nodes
+    if (args.n_gpu_per_node % 8) != 0 and (args.n_gpu_per_node > 8):
+        assert False, "n_gpu_per_node must be multiple of 8"
+    n_nodes = 1
+    if args.n_gpu_per_node > 8:
+        n_nodes = args.n_gpu_per_node // 8
+        args.n_gpu_per_node = 8
+
     # build device topo cluster
+    print('Loading cluster info from {}'.format(args.cluster))
     with open(args.cluster, 'r') as f:
         cluster_info = json.load(f)
     cluster = build_cluster(topo_file='{}/topos/topo-n{}.xml'.format(
-        os.path.dirname(args.cluster), cluster_info['n_gpu_per_node']),
-                            **cluster_info)
+        os.path.dirname(args.cluster), args.n_gpu_per_node),
+                            n_node=n_nodes)
 
     ndev = cluster.n_node * cluster.n_gpu_per_node
 
@@ -104,6 +133,8 @@ if __name__ == '__main__':
         bs = args.bs * ndev
     else:
         bs = args.global_bs
+    
+    bs = bs // args.n_macro_batch
     inputs = {
         # tuple of input shape
         'input': (tuple([bs, seq_length]), (
@@ -117,8 +148,9 @@ if __name__ == '__main__':
     stree.init_config(cluster.dev_topo, stride=2)
     dev_topo = stree.dev_topo
 
+    
     if args.ps == 'dp':
-        assert not args.seq_first
+        assert not args.seq_first, f"seq_first is not supported in {args.ps} mode"
         dp_mesh = dev_topo.create_mesh((ndev, ))
         stree.root.split(0, ndev)
         stree.root.map(dp_mesh)
@@ -311,7 +343,8 @@ if __name__ == '__main__':
                 opt.split(0, dp_deg)
                 opt.map(dmp_mesh)
         if args.checkpoint:
-            layer.recompute()
+            # layer.recompute()
+            layer.attention.recompute()
 
     if args.ps == 'megatron':
         assert pp_deg == 1
@@ -350,7 +383,8 @@ if __name__ == '__main__':
         getattr(stree.root, f'seq{_seq}').map(dmp_mesh)
         stree.root.criterion.split(0, 1, item='in:1')
         stree.root.criterion.map(dp_mesh, item='in:1')
-        stree.schedule()
+        stree.schedule(n_macro_batch=args.n_macro_batch,
+                       max_ongoing_macro_batch=1)
 
     if args.ps == 'pp':
         nlayer_per_stage = num_layers // pp_deg
@@ -401,8 +435,11 @@ if __name__ == '__main__':
         embd_mesh = np.concatenate([mesh[0], mesh[-1]], 0).transpose()
         stree.root.embedding.word_embeddings.split(0, mp_deg, item='weight')
         stree.root.embedding.word_embeddings.map(embd_mesh, item='weight')
-        ongoing = list(reversed(range(1, pp_deg + 1)))
+        ongoing = list(reversed(range(1, pp_deg + 1))) 
+        ongoing = [x * args.n_virtual_stages for x in ongoing]
+        # ongoing = 1
         stree.schedule(n_macro_batch=args.n_macro_batch,
+                       interleave_freq=args.n_virtual_stages,
                        max_ongoing_macro_batch=ongoing)
 
     # if args.ps in ['zero', 'megatron_zero']:
@@ -447,7 +484,7 @@ if __name__ == '__main__':
         # set share weight
         graph.set_share_weight([
             stree.root.embedding.word_embeddings.op,
-            getattr(stree.root, f'seq{num_layers + 1 + 2}').op
+            getattr(stree.root, f'seq{num_layers + 1 + (2 if args.seq_first else 0)}').op
         ], stree)
 
     graph.propagate({})
@@ -456,7 +493,7 @@ if __name__ == '__main__':
 
     stree.dump_tree(config=False)
 
-    if 'titan' in args.cluster or '1080' in args.cluster:
+    if 'titan' in args.cluster or '1080' in args.cluster:   
         overlap_factor = 0.3
     else:
         overlap_factor = 0.1 #0.3
@@ -471,8 +508,34 @@ if __name__ == '__main__':
                     share_bandwidth=(not args.no_share_bandwidth) and (not args.flexflow),
                     overlap_factor=overlap_factor,
                     megatron=True,
-                    FlexFlow=args.flexflow)
-    print('Begin to run simulation...')
-    cost = sim.run('log/trace')
+                    FlexFlow=args.flexflow,
+                    cache_filename=cache_filename)
+    try:
+        print('Begin to run simulation...')
+        cost = sim.run('log/trace')
+        stats = sim.print_stats()
+    
+        print(stats)
 
-    sim.print_stats()
+        # create 
+        # save the output_dict to a json file
+        with open(Path(args.output_dir).joinpath('stats.json'), 'w') as f:
+            # print the output dir path
+            print(f"Output dir: {args.output_dir}")
+            json.dump(stats, f)
+        
+        # If error.log file exists in the ouput_dir, delete it
+        if Path(args.output_dir).joinpath('error.log').exists():
+            Path(args.output_dir).joinpath('error.log').unlink()
+    except Exception as e:
+        print(f"[Proteus] Exception received: {e}")
+        exc_type, exc_value, exc_traceback = sys.exc_info()
+        
+        # Save this to error.log as {exc_type}: {exc_value}
+        with open(Path(args.output_dir).joinpath('error.log'), 'w') as f:
+            f.write(f"{exc_type}: {exc_value}")
+        
+        raise e
+        
+
+    

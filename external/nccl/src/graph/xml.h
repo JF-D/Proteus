@@ -1,11 +1,16 @@
 /*************************************************************************
- * Copyright (c) 2019-2021, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
 
 #ifndef XML_H_
 #define XML_H_
+
+#include "nccl.h"
+#include "debug.h"
+#include "checks.h"
+#include <stdlib.h>
 
 // A few constraints to make the implementation easy
 #define MAX_STR_LEN 255
@@ -88,6 +93,14 @@ static ncclResult_t xmlGetAttrInt(struct ncclXmlNode* node, const char* attrName
   *value = strtol(str, NULL, 0);
   return ncclSuccess;
 }
+
+static ncclResult_t xmlGetAttrIntDefault(struct ncclXmlNode* node, const char* attrName, int* value, int defaultValue) {
+  const char* str;
+  NCCLCHECK(xmlGetAttr(node, attrName, &str));
+  *value = str ? strtol(str, NULL, 0) : defaultValue;
+  return ncclSuccess;
+}
+
 
 static ncclResult_t xmlGetAttrFloat(struct ncclXmlNode* node, const char* attrName, float* value) {
   const char* str;

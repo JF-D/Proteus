@@ -1,5 +1,5 @@
 /*************************************************************************
- * Copyright (c) 2016-2021, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2016-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * See LICENSE.txt for license information
  ************************************************************************/
@@ -8,18 +8,19 @@
 
 #define NCCL_LL128_FLAGTHREAD (NCCL_LL128_LINEELEMS-1)
 
-template<typename T, typename RedOp, typename Fan, int Direct>
-class Primitives<T, RedOp, Fan, Direct, ProtoLL128>:
-  public PrimitivesWithoutDirect<Primitives<T, RedOp, Fan, Direct, ProtoLL128>> {
+template<typename T, typename RedOp, typename Fan, int Direct, int P2p>
+class Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>:
+  public PrimitivesWithoutDirect<Primitives<T, RedOp, Fan, Direct, ProtoLL128, P2p>> {
 
   static constexpr int MaxRecv = Fan::MaxRecv, MaxSend = Fan::MaxSend;
   static constexpr int Input=0, Output=1;
   RedOp redOp;
-  const int tid;
-  const int nthreads;
-  const int wid;
+  const int tid; // thread index in primitives group
+  const int nthreads; // thread count in primitives group
+  const int wid; // lane index in warp
   const int stepSize;
-  const int warp;
+  const int warp; // warp index in primitives group
+  const int warpInBlock; // warp index in thread block
   const bool flagThread;
   const int group;
   Fan fan;
@@ -49,7 +50,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128>:
   inline __device__ uint64_t sendFlag(int i) { return sendStep[i]+1; }
 
   inline __device__ void barrier() {
-    asm volatile ("bar.sync %1, %0;" :: "r"(nthreads), "r"(1+group));
+    asm volatile ("bar.sync %1, %0;" :: "r"(nthreads), "r"(15-group));
   }
 
   uint32_t abort = 0;
@@ -81,7 +82,14 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128>:
     if (recvConnHeadPtr) *recvConnHeadPtr = recvConnHead += 1;
   }
   inline __device__ void postSend() {
-    if (sendConnTailPtr) { __threadfence(); *sendConnTailPtr = sendConnTail += 1; }
+    if (sendConnTailPtr) {
+#if __CUDA_ARCH__ >= 900
+      __threadfence_system();
+#else
+      __threadfence();
+#endif
+      *sendConnTailPtr = sendConnTail += 1;
+    }
   }
 
   template<int WordPerThread>
@@ -108,7 +116,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128>:
       // buffer into shmem.
       int misalignment = reinterpret_cast<uintptr_t>(src) % 16;
       uint64_t *src8 = reinterpret_cast<uint64_t*>(reinterpret_cast<uintptr_t>(src) & -uintptr_t(16));
-      uint64_t *shm8 = shmemCvtPtr(ncclShmem.ll128warp[warp]);
+      uint64_t *shm8 = shmemCvtPtr((uint64_t*)ncclScratchForWarp(warpInBlock));
       #pragma unroll
       for(int g=0; g < WordPerThread/2; g++)
         if((g*WARP_SIZE + wid)*16 < misalignment + eltN*sizeof(T))
@@ -152,7 +160,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128>:
     }
     // Write to dst if 16-byte aligned, shmem otherwise.
     int misalignment = reinterpret_cast<uintptr_t>(dst)%16;
-    uint64_t *shm8 = shmemCvtPtr(ncclShmem.ll128warp[warp]);
+    uint64_t *shm8 = shmemCvtPtr((uint64_t*)ncclScratchForWarp(warpInBlock));
     #pragma unroll
     for(int g=0; g < WordPerThread/2; g++) {
       int ix = g*WARP_SIZE - 4*(g/2) + wid - (g%2)*(wid/8);
@@ -166,7 +174,7 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128>:
     __syncwarp();
     // Write rest from shmem to dst. No need to coalesce stores to 16-bytes,
     // the hardware keeps up fine.
-    T *shm = (T*)ncclShmem.ll128warp[warp];
+    T *shm = (T*)ncclScratchForWarp(warpInBlock);
     int skip = misalignment == 0 ? eltN & -EltPer16B : 0;
     for(int i=skip+wid; i < eltN; i += WARP_SIZE)
       dst[i] = shm[i];
@@ -193,7 +201,12 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128>:
           load128(ptr+u*WARP_SIZE, vr[u], vr[u+1]);
           needReload |= flagThread && (vr[u+1] != flag);
         }
-      } while (__any_sync(WARP_MASK, needReload) && checkAbort(spins, 0, 0) == 0);
+        needReload &= (0 == checkAbort(spins, 0, 0));
+      } while (__any_sync(WARP_MASK, needReload));
+
+      #pragma unroll
+      for (int u=0; u<ELEMS_PER_THREAD; u+=2)
+        load128(ptr+u*WARP_SIZE, vr[u], vr[u+1]);
     }
 
     /************* Finish register load **************/
@@ -204,9 +217,9 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128>:
       if (SrcBuf == Input) {
         #pragma unroll
         for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
-          v[u] = MULTI<RedOp, T>().preOp(redOp, v[u]);
+          v[u] = applyPreOp(redOp, v[u]);
           if (!flagThread)
-            v[u+1] = MULTI<RedOp, T>().preOp(redOp, v[u+1]);
+            v[u+1] = applyPreOp(redOp, v[u+1]);
         }
       }
     }
@@ -214,11 +227,10 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128>:
     /************************ Recv rest *********************/
     if (RECV) {
       { // Consume data from first recv
-        uint64_t* ptr = recvPtr(0)+ll128Offset;
         #pragma unroll
         for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
-          v[u] = SRC ? MULTI<RedOp, T>()(redOp, vr[u], v[u]) : vr[u];
-          v[u+1] = SRC ? MULTI<RedOp, T>()(redOp, vr[u+1], v[u+1]) : vr[u+1];
+          v[u]   = SRC ? applyReduce(redOp, vr[u], v[u]) : vr[u];
+          v[u+1] = SRC ? applyReduce(redOp, vr[u+1], v[u+1]) : vr[u+1];
         }
       }
 
@@ -234,22 +246,27 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128>:
             load128(ptr+u*WARP_SIZE, vr[u], vr[u+1]);
             needReload |= flagThread && (vr[u+1] != flag);
           }
-        } while (__any_sync(WARP_MASK, needReload) && checkAbort(spins, i, 0) == 0);
+          needReload &= (0 == checkAbort(spins, i, 0));
+        } while (__any_sync(WARP_MASK, needReload));
+
+        #pragma unroll
+        for (int u=0; u<ELEMS_PER_THREAD; u+=2)
+          load128(ptr+u*WARP_SIZE, vr[u], vr[u+1]);
 
         #pragma unroll
         for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
-          v[u] = MULTI<RedOp, T>()(redOp, vr[u], v[u]);
-          v[u+1] = MULTI<RedOp, T>()(redOp, vr[u+1], v[u+1]);
+          v[u]   = applyReduce(redOp, vr[u], v[u]);
+          v[u+1] = applyReduce(redOp, vr[u+1], v[u+1]);
         }
       }
     }
     /********************** End Recv ************************/
 
-    if (postOp && !FuncTraits<RedOp>::IsPostOpIdentity) {
+    if (postOp) {
       #pragma unroll
       for (int u=0; u<ELEMS_PER_THREAD; u+=2) {
-        v[u]   = MULTI<RedOp, T>().postOp(redOp, v[u]);
-        v[u+1] = MULTI<RedOp, T>().postOp(redOp, v[u+1]);
+        v[u]   = applyPostOp(redOp, v[u]);
+        v[u+1] = applyPostOp(redOp, v[u+1]);
       }
     }
 
@@ -277,17 +294,9 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128>:
   static constexpr int DataEltPerSlice = (WireWordPerSlice - WireWordPerSlice/NCCL_LL128_LINEELEMS)*(sizeof(uint64_t)/sizeof(T));
 
   template <int RECV, int SEND, int SrcBuf, int DstBuf>
-  __device__ void GenericOp(intptr_t srcIx, intptr_t dstIx, int nelem, bool postOp) {
+  __device__ __forceinline__ void GenericOp(intptr_t srcIx, intptr_t dstIx, int nelem, bool postOp) {
     constexpr int SRC = SrcBuf != -1 ? 1 : 0;
     constexpr int DST = DstBuf != -1 ? 1 : 0;
-    static_assert(-1<=SrcBuf && SrcBuf < 2, "Uhoh");
-    static_assert(-1<=DstBuf && DstBuf < 2, "Uhoh");
-    static_assert(DstBuf!=Input, "Mistake?");
-    #if 0
-    assert((SrcBuf==-1) == (srcIx==-1));
-    assert((DstBuf==-1) == (dstIx==-1));
-    #endif
-
     T const *srcPtr = SrcBuf == -1 ? nullptr : userBufs[SrcBuf] + srcIx;
     T       *dstPtr = DstBuf == -1 ? nullptr : userBufs[DstBuf] + dstIx;
     int wireOffset = WireWordPerSlice*warp + 2*wid;
@@ -354,21 +363,22 @@ class Primitives<T, RedOp, Fan, Direct, ProtoLL128>:
 public:
   __device__ Primitives(
       const int tid, const int nthreads, int const *recvPeers, int const *sendPeers,
-      void const *inputBuf, void *outputBuf, int group=0
+      void const *inputBuf, void *outputBuf, uint64_t redOpArg, uint8_t group=0,
+      uint8_t connIndexRecv=0, uint8_t connIndexSend=0
     ):
-    redOp(FuncTraits<RedOp>().make(ncclShmem.comm.nRanks)),
+    redOp(redOpArg),
     tid(tid), nthreads(nthreads), wid(tid%WARP_SIZE), warp(tid/WARP_SIZE),
+    warpInBlock(threadIdx.x/WARP_SIZE),
     flagThread((tid%8)==7), group(group),
     stepSize(ncclShmem.comm.buffSizes[NCCL_PROTO_LL128]/NCCL_STEPS/sizeof(uint64_t)) {
-
     auto *channel = &ncclShmem.channel;
     int nrecv=0, nsend=0;
     while (nrecv < MaxRecv && recvPeers[nrecv] >= 0) {
-      loadRecvConn(&channel->devPeers[recvPeers[nrecv]].recv->conn, nrecv);
+      loadRecvConn(&channel->peers[recvPeers[nrecv]]->recv[connIndexRecv], nrecv);
       nrecv++;
     }
     while (nsend < MaxSend && sendPeers[nsend] >= 0) {
-      loadSendConn(&channel->devPeers[sendPeers[nsend]].send->conn, nsend);
+      loadSendConn(&channel->peers[sendPeers[nsend]]->send[connIndexSend], nsend);
       nsend++;
     }
     this->fan = Fan(nrecv, nsend);

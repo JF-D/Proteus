@@ -21,8 +21,8 @@ Communicator::Communicator(std::vector<std::vector<int>> groups,
     int pattern;
     int nChannels;
     int sameChannels;
-    float speedIntra;
-    float speedInter;
+    float bwIntra;
+    float bwInter;
     int typeIntra;
     int typeInter;
   };
@@ -79,9 +79,9 @@ Communicator::Communicator(std::vector<std::vector<int>> groups,
       }
     }
 
-    ncclTopoComputePaths(comm->topo, comm->peerInfo);
+    ncclTopoComputePaths(comm->topo, comm);
     ncclTopoTrimSystem(comm->topo, comm);
-    ncclTopoComputePaths(comm->topo, comm->peerInfo);
+    ncclTopoComputePaths(comm->topo, comm);
     ncclTopoSearchInit(comm->topo);
     ncclTopoPrint(comm->topo);
 
@@ -116,22 +116,22 @@ Communicator::Communicator(std::vector<std::vector<int>> groups,
     graphData[i].tree.pattern = treeGraph.pattern;
     graphData[i].tree.nChannels = treeGraph.nChannels;
     graphData[i].tree.sameChannels = treeGraph.sameChannels;
-    graphData[i].tree.speedIntra = treeGraph.speedIntra;
-    graphData[i].tree.speedInter = treeGraph.speedInter;
+    graphData[i].tree.bwIntra = treeGraph.bwIntra;
+    graphData[i].tree.bwInter = treeGraph.bwInter;
     graphData[i].tree.typeIntra = treeGraph.typeIntra;
     graphData[i].tree.typeInter = treeGraph.typeInter;
     graphData[i].ring.pattern = ringGraph.pattern;
     graphData[i].ring.nChannels = ringGraph.nChannels;
     graphData[i].ring.sameChannels = ringGraph.sameChannels;
-    graphData[i].ring.speedIntra = ringGraph.speedIntra;
-    graphData[i].ring.speedInter = ringGraph.speedInter;
+    graphData[i].ring.bwIntra = ringGraph.bwIntra;
+    graphData[i].ring.bwInter = ringGraph.bwInter;
     graphData[i].ring.typeIntra = ringGraph.typeIntra;
     graphData[i].ring.typeInter = ringGraph.typeInter;
     graphData[i].collNet.pattern = collNetGraph.pattern;
     graphData[i].collNet.nChannels = collNetGraph.nChannels;
     graphData[i].collNet.sameChannels = collNetGraph.sameChannels;
-    graphData[i].collNet.speedIntra = collNetGraph.speedIntra;
-    graphData[i].collNet.speedInter = collNetGraph.speedInter;
+    graphData[i].collNet.bwIntra = collNetGraph.bwIntra;
+    graphData[i].collNet.bwInter = collNetGraph.bwInter;
     graphData[i].collNet.typeIntra = collNetGraph.typeIntra;
     graphData[i].collNet.typeInter = collNetGraph.typeInter;
     graphData[i].collNetSupport = comm->collNetSupport;
@@ -144,20 +144,20 @@ Communicator::Communicator(std::vector<std::vector<int>> groups,
     // Make sure we align all ranks so that the tuning is consistent across ranks
     treeGraph.nChannels = std::min(graphData[i].tree.nChannels, treeGraph.nChannels);
     treeGraph.sameChannels = std::min(graphData[i].tree.sameChannels, treeGraph.sameChannels);
-    treeGraph.speedIntra = std::min(graphData[i].tree.speedIntra, treeGraph.speedIntra);
-    treeGraph.speedInter = std::min(graphData[i].tree.speedInter, treeGraph.speedInter);
+    treeGraph.bwIntra = std::min(graphData[i].tree.bwIntra, treeGraph.bwIntra);
+    treeGraph.bwInter = std::min(graphData[i].tree.bwInter, treeGraph.bwInter);
     treeGraph.typeIntra = std::min(graphData[i].tree.typeIntra, treeGraph.typeIntra);
     treeGraph.typeInter = std::min(graphData[i].tree.typeInter, treeGraph.typeInter);
     ringGraph.nChannels = std::min(graphData[i].ring.nChannels, ringGraph.nChannels);
     ringGraph.sameChannels = std::min(graphData[i].ring.sameChannels, ringGraph.sameChannels);
-    ringGraph.speedIntra = std::min(graphData[i].ring.speedIntra, ringGraph.speedIntra);
-    ringGraph.speedInter = std::min(graphData[i].ring.speedInter, ringGraph.speedInter);
+    ringGraph.bwIntra = std::min(graphData[i].ring.bwIntra, ringGraph.bwIntra);
+    ringGraph.bwInter = std::min(graphData[i].ring.bwInter, ringGraph.bwInter);
     ringGraph.typeIntra = std::min(graphData[i].ring.typeIntra, ringGraph.typeIntra);
     ringGraph.typeInter = std::min(graphData[i].ring.typeInter, ringGraph.typeInter);
     collNetGraph.nChannels = std::min(graphData[i].collNet.nChannels, collNetGraph.nChannels);
     collNetGraph.sameChannels = std::min(graphData[i].collNet.sameChannels, collNetGraph.sameChannels);
-    collNetGraph.speedIntra = std::min(graphData[i].collNet.speedIntra, collNetGraph.speedIntra);
-    collNetGraph.speedInter = std::min(graphData[i].collNet.speedInter, collNetGraph.speedInter);
+    collNetGraph.bwIntra = std::min(graphData[i].collNet.bwIntra, collNetGraph.bwIntra);
+    collNetGraph.bwInter = std::min(graphData[i].collNet.bwInter, collNetGraph.bwInter);
     collNetGraph.typeIntra = std::min(graphData[i].collNet.typeIntra, collNetGraph.typeIntra);
     collNetGraph.typeInter = std::min(graphData[i].collNet.typeInter, collNetGraph.typeInter);
     comm->collNetSupport = std::min(graphData[i].collNetSupport, comm->collNetSupport);
@@ -174,7 +174,8 @@ Communicator::Communicator(std::vector<std::vector<int>> groups,
   typeIntra_ = ringGraph.typeIntra;
   typeInter_ = ringGraph.typeInter;
   crossNode_ = nNodes > 1;
-  ncclTopoTuneModel(comm, minCompCap, maxCompCap, &treeGraph, &ringGraph, &collNetGraph);
+  struct ncclTopoGraph* graphs[] = { &treeGraph, &ringGraph, &collNetGraph, &collNetGraph, &collNetGraph, &collNetGraph };
+  ncclTopoTuneModel(comm, minCompCap, maxCompCap, graphs);
 }
 
 int Communicator::get_graph_type_intra() {
@@ -228,7 +229,7 @@ std::vector<float> getAlgoInfo(struct ncclInfo* info, int collNetTypeSupport, in
   if (info->comm->nRanks == 1) return std::vector<float>({0, 0});
   int nAlgos = NCCL_NUM_ALGORITHMS;
   for (int a=0; a<nAlgos; a++) {
-    if (a == NCCL_ALGO_COLLNET && collNetTypeSupport != 1) continue;
+    if (a == NCCL_ALGO_COLLNET_DIRECT && collNetTypeSupport != 1) continue;
     for (int p=0; p<NCCL_NUM_PROTOCOLS; p++) {
       float time;
       std::vector<float> out = ncclTopoGetAlgoBW(info, a, p, numPipeOps, &time);

@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2015-2021, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2015-2022, NVIDIA CORPORATION. All rights reserved.
 #
 # See LICENSE.txt for license information
 #
@@ -9,9 +9,11 @@ include ../makefiles/version.mk
 
 ##### src files
 INCEXPORTS  := nccl.h nccl_net.h
-LIBSRCFILES := init.cc channel.cc bootstrap.cc transport.cc enqueue.cc group.cc debug.cc proxy.cc \
-		misc/nvmlwrap.cc misc/ibvwrap.cc misc/gdrwrap.cc misc/utils.cc misc/argcheck.cc \
-		transport/p2p.cc transport/shm.cc transport/net.cc transport/net_socket.cc transport/net_ib.cc transport/coll_net.cc \
+LIBSRCFILES := init.cc init_nvtx.cc channel.cc bootstrap.cc transport.cc enqueue.cc group.cc debug.cc proxy.cc net.cc \
+		misc/cudawrap.cc misc/nvmlwrap.cc misc/ibvsymbols.cc misc/ibvwrap.cc misc/gdrwrap.cc \
+		misc/utils.cc misc/argcheck.cc misc/socket.cc misc/shmutils.cc misc/profiler.cc misc/param.cc misc/strongstream.cc \
+		misc/ipcsocket.cc \
+		transport/p2p.cc transport/shm.cc transport/net.cc transport/net_socket.cc transport/net_ib.cc transport/coll_net.cc transport/nvls.cc \
                 collectives/sendrecv.cc collectives/all_reduce.cc collectives/all_gather.cc collectives/broadcast.cc collectives/reduce.cc collectives/reduce_scatter.cc \
                 graph/topo.cc graph/paths.cc graph/search.cc graph/connect.cc graph/rings.cc graph/trees.cc graph/tuning.cc graph/xml.cc
 
@@ -28,6 +30,12 @@ OBJDIR := $(BUILDDIR)/obj
 PKGDIR := $(BUILDDIR)/lib/pkgconfig
 ##### target files
 CUDARTLIB  ?= cudart_static
+
+ifeq ($(CUDARTLIB), cudart_static)
+	# Use compatibility shim only with static cudart; see https://github.com/NVIDIA/nccl/issues/658
+	LIBSRCFILES += enhcompat.cc
+endif
+
 INCTARGETS := $(INCEXPORTS:%=$(INCDIR)/%)
 LIBSONAME  := $(LIBNAME:%=%.$(NCCL_MAJOR))
 LIBTARGET  := $(LIBNAME:%=%.$(NCCL_MAJOR).$(NCCL_MINOR).$(NCCL_PATCH))
@@ -40,9 +48,8 @@ LDFLAGS    += -L${CUDA_LIB} -l$(CUDARTLIB) -lpthread -lrt -ldl
 DEVICELIB  := $(BUILDDIR)/obj/collectives/device/colldevice.a
 
 PYTHON := $(shell which python)
-PYPATH := $(shell $(PYTHON) -c "from sysconfig import get_paths; print(get_paths()['include'])")
 PYBIND11_INCDIR := $(abspath ..)/3rdparty/pybind11/include
-PROTEUS_DIR := $(abspath ../../..)/proteus
+PROTEUS_DIR := /home/duanjiangfei/Proteus/proteus
 
 ##### rules
 build : lib staticlib binding
@@ -60,7 +67,7 @@ ALWAYS_REBUILD:
 -include $(DEPFILES)
 $(LIBDIR)/$(LIBTARGET) $(LIBDIR)/$(STATICLIBTARGET) : $(LIBOBJ)
 
-$(INCDIR)/nccl.h : nccl.h.in
+$(INCDIR)/nccl.h : nccl.h.in ../makefiles/version.mk
 # NCCL_VERSION(X,Y,Z) ((X) * 10000 + (Y) * 100 + (Z))
 	@$(eval NCCL_VERSION := $(shell printf "%d%02d%02d" $(NCCL_MAJOR) $(NCCL_MINOR) $(NCCL_PATCH)))
 	mkdir -p $(INCDIR)
@@ -79,14 +86,14 @@ $(LIBDIR)/$(LIBTARGET): $(LIBOBJ) $(DEVICELIB)
 	ln -sf $(LIBSONAME) $(LIBDIR)/$(LIBNAME)
 	ln -sf $(LIBTARGET) $(LIBDIR)/$(LIBSONAME)
 
+null :=
+space := $(null) #
+comma := ,
+
 $(LIBDIR)/$(STATICLIBTARGET): $(LIBOBJ) $(DEVICELIB)
 	@printf "Archiving  %-35s > %s\n" $(STATICLIBTARGET) $@
 	mkdir -p $(LIBDIR)
-	$(eval TMP := $(shell mktemp -d))
-	cp $(LIBOBJ) $(TMP)
-	cd $(TMP) && ar x $(DEVICELIB) && cd -
-	ar cr $@ $(LIBOBJ) $(TMP)/*.o
-	rm -Rf $(TMP)
+	printf "create $@\naddlib $(DEVICELIB)\naddmod $(subst $(space),$(comma),$(strip $(LIBOBJ)))\nsave\nend" | ar -M
 
 $(PKGDIR)/nccl.pc : nccl.pc.in
 	mkdir -p $(PKGDIR)
@@ -126,7 +133,7 @@ clean :
 	$(MAKE) -C collectives/device clean
 	rm -rf ${INCDIR} ${LIBDIR} ${PKGDIR} ${OBJDIR}
 
-install : lib
+install : build
 	mkdir -p $(PREFIX)/lib
 	mkdir -p $(PREFIX)/lib/pkgconfig
 	mkdir -p $(PREFIX)/include
@@ -136,9 +143,9 @@ install : lib
 
 binding : binding/binding.cc $(LIBOBJ) $(DEVICELIB)
 	$(CXX) -I. -I$(INCDIR) -Iinclude -Igraph -Ibinding -Icollectives/device \
-		-I$(PYBIND11_INCDIR) -I$(PYPATH) $(CXXFLAGS) -fpermissive -shared \
+		-I$(PYBIND11_INCDIR) `python -m pybind11 --includes` $(CXXFLAGS) -fpermissive -shared \
 		binding/binding.cc $(LIBOBJ) $(DEVICELIB) \
-		-o $(BUILDDIR)/binding`python3-config --extension-suffix` \
+		-o $(BUILDDIR)/binding`python-config --extension-suffix` \
 		$(LDFLAGS) -L$(BUILDDIR)/lib -lnccl
 
 	ln -snf $(BUILDDIR)/binding`python3-config --extension-suffix` $(PROTEUS_DIR)/binding`python3-config --extension-suffix`
