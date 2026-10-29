@@ -255,6 +255,7 @@ python/examples/log/*
 examples/log/*
 examples/tests/*
 *.txt
+!external/nccl/LICENSE.txt
 *.json.gz
 *.jpg
 *.log
